@@ -1,29 +1,44 @@
 import { pipeline } from "@huggingface/transformers";
 
-class Pipeline {
-  static model = "Xenova/nllb-200-distilled-600M";
-  static instance = null;
+let sttPipeline = null;
 
-  /**
-   * @param {string} text
-   * @param {Object} { src_lang: string, tgt_lang: string }
-   */
-  static async getInstance() {
-    this.instance ??= pipeline("translation", this.model);
+const initializePipeline = async () => {
+  console.log("initializing...");
+  try {
+    sttPipeline = await pipeline(
+      "automatic-speech-recognition",
+      "Xenova/whisper-tiny.en"
+    );
 
-    return this.instance;
+    self.postMessage({ type: "ready" });
+  } catch (error) {
+    self.postMessage({ type: "error", error: String(error) });
   }
-}
+};
+
+const transcribeAudio = async (audioData) => {
+  if (!sttPipeline) throw new Error("STT model not initialized");
+
+  const result = await sttPipeline(audioData);
+  return result.text;
+};
 
 self.addEventListener("message", async (e) => {
-  const { text, src_lang, tgt_lang } = e.data;
+  const { type, data } = e.data;
 
-  const translator = await Pipeline.getInstance();
+  try {
+    switch (type) {
+      case "initialize":
+        await initializePipeline();
+        break;
 
-  const output = await translator(text, {
-    src_lang,
-    tgt_lang,
-  });
-
-  self.postMessage(output);
+      case "stt":
+        const text = await transcribeAudio(data.audio);
+        console.log(text);
+        self.postMessage({ type: "transcription", data: { text } });
+        break;
+    }
+  } catch (error) {
+    self.postMessage({ type: "errorz", error: String(error) });
+  }
 });
