@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from "react";
 
 function App() {
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [userText, setUserText] = useState("");
+  const [llmText, setLlmText] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState({
+    model: null,
+    progress: 0,
+  });
 
   const worker = useRef<Worker | null>(null);
 
@@ -14,23 +22,54 @@ function App() {
           type: "module",
         }
       );
-
-      console.log(worker);
     }
 
     worker.current.addEventListener("message", (e) => {
-      const { type, data } = e.data;
+      const { type, data, error } = e.data;
 
       console.log(type);
       console.log(data);
 
       switch (type) {
+        case "progress":
+          setLoadingStatus({
+            model: data.model,
+            progress: data.progress,
+          });
+          break;
+
         case "ready":
           setLoading(false);
+          setLoadingStatus({ model: null, progress: 100 });
+          setReady(true);
           break;
 
         case "transcription":
           setUserText(data.text);
+          break;
+
+        case "complete":
+          setIsProcessing(false);
+          break;
+
+        case "llmResponse":
+          setLlmText(data.response);
+          break;
+
+        case "audio": {
+          const url = URL.createObjectURL(data.blob);
+
+          const audio = new Audio(url);
+          audio.play();
+
+          audio.onended = () => URL.revokeObjectURL(url);
+
+          break;
+        }
+
+        case "error":
+          console.error("Worker error:", error);
+          setIsProcessing(false);
           break;
       }
     });
@@ -46,6 +85,9 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   const startListening = async () => {
+    setIsListening(true);
+    setUserText("");
+
     audioChunksRef.current = [];
 
     try {
@@ -72,6 +114,7 @@ function App() {
       source.connect(processor);
       processor.connect(audioContextRef.current.destination);
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mediaRecorderRef.current = { stream, source, processor } as any;
     } catch (error) {
       console.error("Microphone access error:", error);
@@ -79,8 +122,11 @@ function App() {
   };
 
   const stopListening = () => {
+    setIsListening(false);
+
     if (mediaRecorderRef.current) {
       const { stream, source, processor } =
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         mediaRecorderRef.current as any;
 
       processor.disconnect();
@@ -89,7 +135,6 @@ function App() {
         .getTracks()
         .forEach((track: MediaStreamTrack) => track.stop());
 
-      // Concatenate all audio chunks
       const totalLength = audioChunksRef.current.reduce(
         (sum, chunk) => sum + chunk.length,
         0
@@ -115,26 +160,47 @@ function App() {
       <h1>voiceChatBot</h1>
       <p>converse with AI locally!</p>
 
-      {loading && <p>loading... please wait</p>}
+      {loading && (
+        <p>loading... please wait {loadingStatus.progress}</p>
+      )}
 
-      <button
-        disabled={loading}
-        className="btn w-1/2"
-        onClick={handleStartSession}
-      >
-        start session
-      </button>
-
-      <div>
-        <button className="btn" onClick={startListening}>
-          start listening
+      {!ready && (
+        <button
+          disabled={loading}
+          className="btn w-1/2"
+          onClick={handleStartSession}
+        >
+          start session
         </button>
-        <button className="btn" onClick={stopListening}>
-          stop listening
-        </button>
-      </div>
+      )}
 
-      <p>you say: {userText}</p>
+      {ready && (
+        <>
+          <div>
+            {isListening ? (
+              <button
+                disabled={isProcessing}
+                className="btn btn-error"
+                onClick={() => stopListening()}
+              >
+                stop listening
+              </button>
+            ) : (
+              <button
+                disabled={isProcessing}
+                className="btn btn-primary"
+                onClick={() => startListening()}
+              >
+                start listening
+              </button>
+            )}
+          </div>
+
+          {<p>{loadingStatus.progress}</p>}
+          {userText && <p>you say: {userText}</p>}
+          {llmText && <p>LLM responds: {llmText}</p>}
+        </>
+      )}
     </div>
   );
 }
